@@ -19,18 +19,15 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Install Android SDK
+      - name: Accept Android SDK licenses
         run: |
-          mkdir -p "$HOME/android-sdk/cmdline-tools"
-          curl -fsSL -o "$RUNNER_TEMP/cmdtools.zip" https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q "$RUNNER_TEMP/cmdtools.zip" -d "$HOME/android-sdk/cmdline-tools"
-          mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" "$HOME/android-sdk/cmdline-tools/latest"
-          echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
-          yes | "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
 
       - name: Assemble debug and release
-        run: chmod +x ./gradlew && ./gradlew assembleDebug assembleRelease --no-daemon
+        run: |
+          unset ANDROID_SDK_ROOT
+          chmod +x ./gradlew
+          ./gradlew assembleDebug assembleRelease --no-daemon
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

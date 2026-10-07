@@ -377,33 +377,92 @@ static void dump_decoded(uintptr_t *starts, uintptr_t *ends, int count) {
     free(maps);
 }
 
+__attribute__((noinline, optnone)) static int same_bytes(const void *left, const void *right, size_t n) {
+    const unsigned char *a = (const unsigned char *) left;
+    const unsigned char *b = (const unsigned char *) right;
+    size_t i;
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int poke_mem(void *addr, const void *bytes, size_t n) {
+    int fd = raw4(56, AT_FDCWD, (long) "/proc/self/mem", 1, 0);
+    int wrote;
+    if (fd < 0) {
+        return 0;
+    }
+    wrote = raw4(68, fd, (long) bytes, (long) n, (long) addr);
+    raw4(57, fd, 0, 0, 0);
+    if (wrote == (int) n) {
+        clear_icache(addr, n);
+        return 1;
+    }
+    return 0;
+}
+
+__attribute__((noinline, optnone)) static int patch_late(uintptr_t start, uintptr_t end) {
+    static const unsigned char maps_old[] = "/proc/self/maps";
+    static const unsigned char maps_new[] = "/proc/self/fd/9";
+    static const unsigned char udf_bad[] = {
+            0xea, 0x03, 0x1f, 0xaa, 0xe9, 0x00, 0x00, 0x00, 0xea, 0x6a, 0x6a, 0x38
+    };
+    static const unsigned char udf_fix[] = {0xe9, 0x03, 0x0a, 0xaa};
+    uintptr_t p;
+    int hits = 0;
+    if (end < start || end - start > 0x2000000u) {
+        return 0;
+    }
+    for (p = start; p + 15 <= end; p++) {
+        if (same_bytes((void *) p, maps_old, 15) && poke_mem((void *) p, maps_new, 15)) {
+            hits++;
+            nlog("maps path");
+        }
+    }
+    for (p = start; p + 12 <= end; p += 4) {
+        if (same_bytes((void *) p, udf_bad, 12) && poke_mem((void *) (p + 4), udf_fix, 4)) {
+            hits++;
+            nlog("udf restored");
+        }
+    }
+    return hits;
+}
+
+static void nap20(void) {
+    long req[2];
+    req[0] = 0;
+    req[1] = 20000000L;
+    raw4(101, (long) req, 0, 0, 0);
+}
+
 static void *watch_dexhelper(void *arg) {
-    int i;
-    int total = 0;
-    int quiet = 0;
+    int hot = 0;
+    int ticks = 0;
     (void) arg;
-    for (i = 0; i < 200000; i++) {
+    while (ticks < 50000) {
         uintptr_t starts[8];
         uintptr_t ends[8];
         int count = dexhelper_ranges(starts, ends, 8);
         int range;
-        int hits = 0;
-        if (count == 0) {
-            continue;
-        }
-        for (range = 0; range < count; range++) {
-            hits += patch_suicide(starts[range], ends[range]);
-        }
-        if (hits > 0) {
-            total += hits;
-            quiet = 0;
-            nlog_hex("suicide ", (uintptr_t) total);
-        } else if (total > 0) {
-            quiet++;
-            if (quiet > 40) {
-                return NULL;
+        int suicide = 0;
+        if (count > 0) {
+            for (range = 0; range < count; range++) {
+                suicide += patch_suicide(starts[range], ends[range]);
+                patch_late(starts[range], ends[range]);
+            }
+            if (suicide > 0) {
+                nlog_hex("suicide ", (uintptr_t) suicide);
+            }
+            if (hot < 800) {
+                hot++;
+                continue;
             }
         }
+        nap20();
+        ticks++;
     }
     nlog("watch done");
     return NULL;
